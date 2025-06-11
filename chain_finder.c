@@ -350,11 +350,15 @@ void scan_memory_for_chain_starts(const TargetInfo *target, const SearchSpace *s
              current_addr <= region->end_addr - sizeof(uintptr_t) && current_addr < region->end_addr;
              current_addr += sizeof(uintptr_t)) {
 
+            // printf("DEBUG_SCAN_STARTS: current_addr = 0x%lx (region: %s 0x%lx - 0x%lx)\n", (unsigned long)current_addr, region->module_name, (unsigned long)region->start_addr, (unsigned long)region->end_addr); // Removed unconditional log
             // printf("DEBUG: scan_memory_for_chain_starts: Attempting to read initial pointer at address 0x%lx (Module: %s, Region Start: 0x%lx, Region End: 0x%lx)\n", (unsigned long)current_addr, region->module_name, (unsigned long)region->start_addr, (unsigned long)region->end_addr); // Verbose
 
             uintptr_t pointer_candidate_value;
             if (read_memory_value_at(target->pid, current_addr, &pointer_candidate_value) != 0) {
-                // fprintf(stderr, "DEBUG: scan_memory_for_chain_starts: read_memory_value_at FAILED for initial pointer at 0x%lx.\n", (unsigned long)current_addr); // Verbose
+                fprintf(stderr, "DEBUG_SCAN_STARTS_FAIL: read_memory_value_at failed for current_addr = 0x%lx (region: %s 0x%lx - 0x%lx)\n",
+                        (unsigned long)current_addr, region->module_name,
+                        (unsigned long)region->start_addr, (unsigned long)region->end_addr);
+                // fprintf(stderr, "DEBUG: scan_memory_for_chain_starts: read_memory_value_at FAILED for initial pointer at 0x%lx.\n", (unsigned long)current_addr); // Old verbose log
                 continue;
             }
 
