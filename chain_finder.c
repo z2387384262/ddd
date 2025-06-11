@@ -208,73 +208,91 @@ int get_module_memory_ranges(int pid, const char *module_name_specifier, SearchS
     char path_from_maps[512];
 
     while (fgets(line_buffer, sizeof(line_buffer), maps_file)) {
-        printf("DEBUG_GMMR_MAPS_LINE: Read maps line: %s", line_buffer);
+        // Preliminary check on the raw line_buffer
+        if (strstr(line_buffer, name_to_search_in_maps) != NULL) {
+            printf("DEBUG_GMMR_MAPS_LINE: Candidate line: %s", line_buffer); // Log the potentially relevant raw line
 
-        path_from_maps[0] = '\0';
-        perms[0] = '\0';
-
-        int items_parsed = sscanf(line_buffer, "%lx-%lx %4s %*x %*s %*d %511[^\n]",
-                                 &temp_start, &temp_end, perms, path_from_maps);
-
-        if (items_parsed < 3) {
-            char addr_str[64], perm_str_local[5], offset_str[64], dev_str[64], inode_str[64];
             path_from_maps[0] = '\0';
-            int fallback_items_parsed = sscanf(line_buffer, "%s %4s %s %s %s %511[^\n]",
-                                  addr_str, perm_str_local, offset_str, dev_str, inode_str, path_from_maps);
-            if (fallback_items_parsed >= 2) {
-                 sscanf(addr_str, "%lx-%lx", &temp_start, &temp_end);
-                 strncpy(perms, perm_str_local, 4);
-                 perms[4] = '\0';
-                 items_parsed = fallback_items_parsed < 3 ? 2 : 3; // Indicate at least perms were found
-            } else {
-                printf("DEBUG_GMMR_PARSE: Failed to parse addresses/perms from line (items_parsed=%d for primary, %d for fallback): %s", items_parsed, fallback_items_parsed, line_buffer);
-                continue;
+            perms[0] = '\0';
+            temp_start = 0; // Initialize to ensure they have values for logging if sscanf fails partially
+            temp_end = 0;
+
+            int items_parsed = sscanf(line_buffer, "%lx-%lx %4s %*x %*s:%*s %*d %511[^\n]",
+                                     &temp_start, &temp_end, perms, path_from_maps);
+
+            if (items_parsed < 3) {
+                char addr_str[64], perm_str_local[5], offset_str[64], dev_str[64], inode_str[64];
+                path_from_maps[0] = '\0';
+                int fallback_items_parsed = sscanf(line_buffer, "%s %4s %s %s %s %511[^\n]",
+                                      addr_str, perm_str_local, offset_str, dev_str, inode_str, path_from_maps);
+                if (fallback_items_parsed >= 2) {
+                     sscanf(addr_str, "%lx-%lx", &temp_start, &temp_end);
+                     strncpy(perms, perm_str_local, 4);
+                     perms[4] = '\0';
+                     items_parsed = fallback_items_parsed < 3 ? 2 : 3;
+                } else {
+                    printf("DEBUG_GMMR_PARSE: Failed to parse addresses/perms from line (items_parsed=%d for primary, %d for fallback): %s", items_parsed, fallback_items_parsed, line_buffer);
+                    continue;
+                }
             }
-        }
 
-        printf("DEBUG_GMMR_PARSE: Parsed: start=0x%lx, end=0x%lx, perms=%s, path_attempt='%s'\n", temp_start, temp_end, perms, path_from_maps);
+            printf("DEBUG_GMMR_PARSE: Parsed: start=0x%lx, end=0x%lx, perms=%s, path_from_maps='%s'\n", temp_start, temp_end, perms, path_from_maps);
 
-        if (strchr(perms, 'r') != NULL) {
-            char *match_ptr = NULL;
-            if (path_from_maps[0] != '\0') {
-                match_ptr = strstr(path_from_maps, name_to_search_in_maps);
-            }
-            printf("DEBUG_GMMR_STRSTR: strstr for '%s' in path '%s'. Result pointer: %p\n", name_to_search_in_maps, path_from_maps, (void*)match_ptr);
+            if (strchr(perms, 'r') != NULL) {
+                char *match_ptr = NULL;
+                if (path_from_maps[0] != '\0') {
+                    match_ptr = strstr(path_from_maps, name_to_search_in_maps);
+                }
+                // No separate log for strstr here, as the ADDED/FAIL_POST_PARSE will cover it.
 
-            if (match_ptr != NULL) {
-                size_t name_len = strlen(name_to_search_in_maps);
-                int is_standalone_match = 1;
+                if (match_ptr != NULL) {
+                    size_t name_len = strlen(name_to_search_in_maps);
+                    int is_standalone_match = 1;
 
-                if (match_ptr > path_from_maps) {
-                    char char_before = *(match_ptr - 1);
-                    if (char_before != '/' && char_before != ' ' && char_before != '-') {
-                        is_standalone_match = 0;
-                        // printf("DEBUG_GMMR_VALIDATION: Match for '%s' rejected. Char before is '%c' in path '%s'\n", name_to_search_in_maps, char_before, path_from_maps); // Verbose
+                    if (match_ptr > path_from_maps) {
+                        char char_before = *(match_ptr - 1);
+                        if (char_before != '/' && char_before != ' ' && char_before != '-') {
+                            is_standalone_match = 0;
+                        }
                     }
-                }
-                if (is_standalone_match && *(match_ptr + name_len) != '\0' && *(match_ptr + name_len) != ' ' && *(match_ptr + name_len) != '.' && *(match_ptr + name_len) != ':') {
-                     is_standalone_match = 0;
-                     // printf("DEBUG_GMMR_VALIDATION: Match for '%s' rejected. Char after is '%c' in path '%s'\n", name_to_search_in_maps, *(match_ptr + name_len), path_from_maps); // Verbose
-                }
+                    if (is_standalone_match && *(match_ptr + name_len) != '\0' && *(match_ptr + name_len) != ' ' && *(match_ptr + name_len) != '.' && *(match_ptr + name_len) != ':') {
+                         is_standalone_match = 0;
+                    }
 
-                if (is_standalone_match) {
-                    if (search_space->count < (MAX_MODULES_TO_SCAN * MAX_RANGES_PER_MODULE)) {
-                        SearchRegion *region = &search_space->regions[search_space->count];
-                        region->start_addr = (uintptr_t)temp_start;
-                        region->end_addr = (uintptr_t)temp_end;
-                        strncpy(region->module_name, name_to_search_in_maps, sizeof(region->module_name) - 1);
-                        region->module_name[sizeof(region->module_name) - 1] = '\0';
+                    if (is_standalone_match) {
+                        if (search_space->count < (MAX_MODULES_TO_SCAN * MAX_RANGES_PER_MODULE)) {
+                            SearchRegion *region = &search_space->regions[search_space->count];
+                            region->start_addr = (uintptr_t)temp_start;
+                            region->end_addr = (uintptr_t)temp_end;
+                            strncpy(region->module_name, name_to_search_in_maps, sizeof(region->module_name) - 1);
+                            region->module_name[sizeof(region->module_name) - 1] = '\0';
 
-                        printf("DEBUG_GMMR: ADDED region for '%s': start=0x%lx, end=0x%lx, perms=%s, full_path_from_maps='%s'\n",
-                               name_to_search_in_maps, (unsigned long)region->start_addr, (unsigned long)region->end_addr, perms, path_from_maps);
-                        search_space->count++;
+                            printf("DEBUG_GMMR: ADDED region for '%s': start=0x%lx, end=0x%lx, perms=%s, full_path_from_maps='%s'\n",
+                                   name_to_search_in_maps, (unsigned long)region->start_addr, (unsigned long)region->end_addr, perms, path_from_maps);
+                            search_space->count++;
+                        } else {
+                            fprintf(stderr, "警告(get_module_memory_ranges): SearchSpace区域已满 (%d)，无法添加更多模块区域。\n", search_space->count);
+                        }
                     } else {
-                        fprintf(stderr, "警告(get_module_memory_ranges): SearchSpace区域已满 (%d)，无法添加更多模块区域。\n", search_space->count);
+                        printf("DEBUG_GMMR_STRSTR_FAIL_POST_PARSE: Parsed path '%s' contained '%s' but failed standalone validation.\n", path_from_maps, name_to_search_in_maps);
                     }
+                } else { // match_ptr is NULL
+                    printf("DEBUG_GMMR_STRSTR_FAIL_POST_PARSE: Parsed path '%s' did not contain '%s' or path was empty after parse.\n", path_from_maps, name_to_search_in_maps);
                 }
+            } else { // Not readable
+                printf("DEBUG_GMMR_NOT_READABLE: Region from candidate line not readable (perms: %s).\n", perms);
             }
-        } else {
-            // printf("DEBUG_GMMR_PERMS: Region not readable: perms=%s, path='%s'\n", perms, path_from_maps); // Too verbose
+        } // else: line does not contain name_to_search_in_maps initially, skip silently.
+    }
+    fclose(maps_file);
+    if (search_space->count == 0) {
+        printf("DEBUG_GMMR: Loop finished, no regions added for '%s' (specifier '%s'). search_space->count = %d\n",
+               name_to_search_in_maps, module_name_specifier, search_space->count);
+    }
+    return 0;
+}
+
+int read_memory_value_at(int pid, uintptr_t address, uintptr_t *value_read) {
         }
     }
 
