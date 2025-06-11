@@ -306,13 +306,14 @@ int read_memory_value_at(int pid, uintptr_t address, uintptr_t *value_read) {
     ssize_t bytes_read = process_vm_readv(pid, &local_iov, 1, &remote_iov, 1, 0);
 
     if (bytes_read == -1) {
-        fprintf(stderr, "错误(read_memory_value_at): process_vm_readv 读取地址 0x%lx (PID %d) 失败: %s (errno %d)\n",
-                (unsigned long)address, pid, strerror(errno), errno);
+        // Commented out to reduce verbosity for expected "Bad address" errors
+        // fprintf(stderr, "错误(read_memory_value_at): process_vm_readv 读取地址 0x%lx (PID %d) 失败: %s (errno %d)\n",
+        //         (unsigned long)address, pid, strerror(errno), errno);
         return -1;
     }
     if ((size_t)bytes_read < sizeof(uintptr_t)) {
-        fprintf(stderr, "错误(read_memory_value_at): 读取不完整, 期望 %zu 字节, 实际读取 %zd 字节, 地址 0x%lx, PID %d\n",
-                sizeof(uintptr_t), bytes_read, (unsigned long)address, pid);
+        // fprintf(stderr, "错误(read_memory_value_at): 读取不完整, 期望 %zu 字节, 实际读取 %zd 字节, 地址 0x%lx, PID %d\n",
+        //         sizeof(uintptr_t), bytes_read, (unsigned long)address, pid); // Also potentially verbose
         return -1;
     }
     // printf("DEBUG: read_memory_value_at: Successfully read 0x%lx from PID %d address 0x%lx\n", *value_read, pid, (unsigned long)address); // Verbose
@@ -342,19 +343,28 @@ void scan_memory_for_chain_starts(const TargetInfo *target, const SearchSpace *s
     printf("开始扫描内存区域以查找链起点 (%d 个区域)...\n", space->count);
     for (int i = 0; i < space->count; ++i) {
         const SearchRegion *region = &space->regions[i];
-        printf("  正在扫描区域 %d/%d: %s (0x%lx - 0x%lx)\n",
+        printf("  正在扫描区域 %d/%d: %s (0x%lx - 0x%lx)", // Removed \n
                i + 1, space->count, region->module_name,
                (unsigned long)region->start_addr, (unsigned long)region->end_addr);
+        fflush(stdout); // Ensure region line prints before dots
 
+        unsigned long addresses_in_current_region_for_dots = 0;
         for (uintptr_t current_addr = region->start_addr;
              current_addr <= region->end_addr - sizeof(uintptr_t) && current_addr < region->end_addr;
              current_addr += sizeof(uintptr_t)) {
 
-            // printf("DEBUG_SCAN_STARTS: current_addr = 0x%lx (region: %s 0x%lx - 0x%lx)\n", (unsigned long)current_addr, region->module_name, (unsigned long)region->start_addr, (unsigned long)region->end_addr); // Removed unconditional log
+            addresses_in_current_region_for_dots++;
+            if (addresses_in_current_region_for_dots % 131072 == 0) { // Print dot every 128k addresses for this region
+                printf(".");
+                fflush(stdout);
+            }
+
+            // printf("DEBUG_SCAN_STARTS: current_addr = 0x%lx (region: %s 0x%lx - 0x%lx)\n", (unsigned long)current_addr, region->module_name, (unsigned long)region->start_addr, (unsigned long)region->end_addr); // Old unconditional log
             // printf("DEBUG: scan_memory_for_chain_starts: Attempting to read initial pointer at address 0x%lx (Module: %s, Region Start: 0x%lx, Region End: 0x%lx)\n", (unsigned long)current_addr, region->module_name, (unsigned long)region->start_addr, (unsigned long)region->end_addr); // Verbose
 
             uintptr_t pointer_candidate_value;
             if (read_memory_value_at(target->pid, current_addr, &pointer_candidate_value) != 0) {
+                // Commented out to reduce verbosity for expected "Bad address" errors
                 fprintf(stderr, "DEBUG_SCAN_STARTS_FAIL: read_memory_value_at failed for current_addr = 0x%lx (region: %s 0x%lx - 0x%lx)\n",
                         (unsigned long)current_addr, region->module_name,
                         (unsigned long)region->start_addr, (unsigned long)region->end_addr);
@@ -374,9 +384,11 @@ void scan_memory_for_chain_starts(const TargetInfo *target, const SearchSpace *s
             chain_prototype.base_address_in_region = current_addr;
             chain_prototype.chain_links[0] = current_addr;
 
+            // This log is useful to see when recursive search starts
             // printf("DEBUG: scan_memory_for_chain_starts: Calling find_chains_recursive with base_P1_addr=0x%lx, val_P1=0x%lx, depth_idx=0\n", (unsigned long)chain_prototype.chain_links[0], (unsigned long)pointer_candidate_value); // Verbose
             find_chains_recursive(target, constraints, pointer_candidate_value, 0, &chain_prototype, results);
         }
+        printf("\n"); // Newline after processing all addresses in a region and its dots
     }
     printf("内存区域扫描完成。\n");
 }
